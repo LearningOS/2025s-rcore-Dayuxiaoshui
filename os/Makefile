@@ -52,7 +52,7 @@ clean:
 	@cargo clean
 
 disasm: kernel
-	@$(OBJDUMP) $(DISASM) $(KERNEL_ELF) | less
+	@$(OBJDUMP) $(DISASM) $(KERNEL_ELF) | 更少
 
 disasm-vim: kernel
 	@$(OBJDUMP) $(DISASM) $(KERNEL_ELF) > $(DISASM_TMP)
