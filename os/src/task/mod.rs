@@ -15,13 +15,17 @@ mod switch;
 mod task;
 
 use crate::config::MAX_APP_NUM;
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::task::task::SyscallInfo;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+
+use core::cell::RefMut;
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -54,6 +58,7 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            syscall_times: [SyscallInfo{id: 0, times:0}; MAX_SYSCALL_NUM],
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -135,6 +140,13 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    // Get mutable reference to current task's TCB in inner.
+    fn current_task(&self) -> RefMut<TaskControlBlock> {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        RefMut::map(inner, |inner| &mut inner.tasks[current])
+    }
 }
 
 /// Run the first task in task list.
@@ -168,4 +180,36 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Update syscall times of current task when a syscall is called.
+pub fn update_syscall_times(syscall_id: usize) {
+    let mut current_task = TASK_MANAGER.current_task();
+
+    for info in current_task.syscall_times.iter_mut() {
+        if info.id == syscall_id {
+            info.times += 1;
+            return;
+        } else if info.times == 0 {
+            info.id = syscall_id;
+            info.times += 1;
+            return;
+        }
+    }
+
+    panic!();
+}
+
+/// Return the times of a syscall called by current task.
+pub fn get_syscall_times(syscall_id: usize) -> usize {
+    let current_task = TASK_MANAGER.current_task();
+
+    for info in current_task.syscall_times.iter() {
+        if info.id == syscall_id {
+            return info.times;
+        } else if info.times == 0 {
+            return 0;
+        }
+    }
+    0
 }
