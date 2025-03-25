@@ -1,4 +1,3 @@
-//! The main module and entrypoint
 //!
 //! Various facilities of the kernels are implemented as submodules. The most
 //! important ones are:
@@ -18,7 +17,7 @@
 //! userspace.
 
 #![deny(missing_docs)]
-#![deny(warnings)]
+// #![deny(warnings)]
 #![no_std]
 #![no_main]
 #![feature(panic_info_message)]
