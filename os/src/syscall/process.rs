@@ -3,12 +3,12 @@
 use alloc::sync::Arc;
 
 use crate::{
+    config::MAX_SYSCALL_NUM,
     fs::{open_file, OpenFlags},
-    mm::{translated_refmut, translated_str},
+    mm::{translated_refmut, translated_str, PhysAddr, VirtAddr},
     task::{
-        add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next,
-    },
+        add_task, current_task, current_user_token, exit_current_and_run_next, get_task_info, ppn_by_vpn, suspend_current_and_run_next, task_mmap, task_munmap, TaskStatus
+    }, timer::get_time_us,
 };
 
 #[repr(C)]
@@ -16,6 +16,29 @@ use crate::{
 pub struct TimeVal {
     pub sec: usize,
     pub usec: usize,
+}
+
+/// Task information
+#[allow(dead_code)]
+pub struct TaskInfo {
+    /// Task status in it's life cycle
+    pub status: TaskStatus,
+    /// The numbers of syscall called by task
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+    /// Total running time of task
+    pub time: usize,
+}
+
+pub fn va_to_pa(va: VirtAddr) -> Option<PhysAddr> {
+    let offset = va.page_offset();
+    let ppn = ppn_by_vpn(va.floor());
+    match ppn {
+        Some(ppn) => Some(PhysAddr::from((ppn.0 << 12) | offset)),
+        _ => {
+            error!("sys_get_time() failed");
+            None
+        }
+    }
 }
 
 pub fn sys_exit(exit_code: i32) -> ! {
@@ -110,7 +133,45 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
         "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let ts = va_to_pa(VirtAddr::from(_ts as usize));
+    if let Some(pa) = ts {
+        let us = get_time_us();
+        let ts = pa.0 as *mut TimeVal;
+        unsafe {
+            *ts = TimeVal {
+                sec: us / 1_000_000,
+                usec: us % 1_000_000,
+            };
+        }
+        0
+    } else {
+        error!("sys_get_time() failed");
+        -1
+    }
+}
+
+/// YOUR JOB: Finish sys_task_info to pass testcases
+/// HINT: You might reimplement it with virtual memory management.
+/// HINT: What if [`TaskInfo`] is splitted by two pages ?
+pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
+    trace!(
+        "kernel:pid[{}] sys_task_info NOT IMPLEMENTED",
+        current_task().unwrap().pid.0
+    );
+    if _ti.is_null() {
+        return -1
+    }
+
+    let va = VirtAddr::from(_ti as usize);
+    let pa = va_to_pa(va);
+    if let Some(pa) = pa {
+        let ti = pa.0 as *mut TaskInfo;
+        get_task_info(ti);
+        0
+    } else {
+        error!("sys_task_info() failed");
+        -1
+    }
 }
 
 /// YOUR JOB: Implement mmap.
@@ -119,7 +180,7 @@ pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
         "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    task_mmap(_start, _len, _port)
 }
 
 /// YOUR JOB: Implement munmap.
@@ -128,7 +189,7 @@ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
         "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    task_munmap(_start, _len)
 }
 
 /// change data segment size
@@ -148,7 +209,25 @@ pub fn sys_spawn(_path: *const u8) -> isize {
         "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+    let path = translated_str(token, _path);
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let all_data = app_inode.read_all();
+        let new_task = current_task().unwrap().spawn(all_data.as_slice());
+        let new_pid = new_task.getpid();
+        // modify trap context of new_task, because it returns immediately after switching
+        let trap_cx = new_task.inner_exclusive_access().get_trap_cx();
+        // we do not have to move to next instruction since we have done it before
+        // for child process, fork returns 0
+        trap_cx.x[10] = 0;
+        // add new task to scheduler
+        add_task(new_task);
+        // return new task's pid
+        new_pid as isize
+    } else {
+        error!("sys_spawn() failed");
+        -1
+    }
 }
 
 // YOUR JOB: Set task priority.
@@ -157,5 +236,9 @@ pub fn sys_set_priority(_prio: isize) -> isize {
         "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if _prio <= 1 {
+        return -1;
+    }
+    current_task().unwrap().inner_exclusive_access().set_prio(_prio as usize);
+    _prio
 }

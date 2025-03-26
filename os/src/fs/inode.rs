@@ -4,7 +4,7 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use super::{File, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
@@ -40,8 +40,7 @@ impl OSInode {
     /// read all data from the inode
     pub fn read_all(&self) -> Vec<u8> {
         let mut inner = self.inner.exclusive_access();
-        let mut buffer: Vec<u8> = Vec::with_capacity(512);
-        buffer.resize(512, 0);
+        let mut buffer = [0u8; 512];
         let mut v: Vec<u8> = Vec::new();
         loop {
             let len = inner.inode.read_at(inner.offset, &mut buffer);
@@ -52,6 +51,18 @@ impl OSInode {
             v.extend_from_slice(&buffer[..len]);
         }
         v
+    }
+
+    /// get inode status
+    pub fn get_inode_stat(&self) -> StatMode {
+        let inner = self.inner.exclusive_access();
+        StatMode::from_bits(inner.inode.get_inode_stat()).unwrap()
+    }
+
+    /// get inode id
+    pub fn get_inode_id(&self) -> u64 {
+        let inner = self.inner.exclusive_access();
+        inner.inode.get_inode_id()
     }
 }
 
@@ -155,5 +166,52 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn fstat(&self) -> (u64, super::StatMode, u32) {
+        let ino = self.get_inode_id();
+        let mode = self.get_inode_stat();
+        let nlink = ROOT_INODE.get_link_count(ino);
+        (ino, mode, nlink)
+    }
+}
+
+/// create a link 
+pub fn linkat(old_name: *const u8, new_name: *const u8) -> isize {
+    let mut length = 0;
+    unsafe {
+        let mut ptr = old_name;
+        while (*ptr) as char != '\0' {
+            length += 1;
+            ptr = ptr.offset(1);
+        }
+        let old_name = core::str::from_utf8_unchecked(
+            core::slice::from_raw_parts(old_name, length)
+        );
+        length = 0;
+        let mut ptr = new_name;
+        while (*ptr) as char != '\0' {
+            length += 1;
+            ptr = ptr.offset(1);
+        }
+        let new_name = core::str::from_utf8_unchecked(
+            core::slice::from_raw_parts(new_name, length)
+        );
+        ROOT_INODE.linkat(old_name, new_name)
+    }
+}
+
+/// remove a link
+pub fn unlinkat(name: *const u8) -> isize {
+    let mut length = 0;
+    unsafe {
+        let mut ptr = name;
+        while *ptr != 0 {
+            length += 1;
+            ptr = ptr.offset(1);
+        }
+        let name = core::str::from_utf8_unchecked(
+            core::slice::from_raw_parts(name, length)
+        );
+        ROOT_INODE.unlinkat(name)
     }
 }

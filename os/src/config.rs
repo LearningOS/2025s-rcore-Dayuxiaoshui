@@ -13,6 +13,8 @@ pub const KERNEL_HEAP_SIZE: usize = 0x200_0000;
 pub const PAGE_SIZE: usize = 0x1000;
 /// page size bits: 12
 pub const PAGE_SIZE_BITS: usize = 0xc;
+/// the max number of syscall
+pub const MAX_SYSCALL_NUM: usize = 500;
 /// the virtual addr of trapoline
 pub const TRAMPOLINE: usize = usize::MAX - PAGE_SIZE + 1;
 /// the virtual addr of trap context
@@ -23,3 +25,6 @@ pub const CLOCK_FREQ: usize = 12500000;
 pub const MEMORY_END: usize = 0x88000000;
 /// The base address of control registers in Virtio_Block device
 pub const MMIO: &[(usize, usize)] = &[(0x10001000, 0x1000)];
+
+/// BIG STRIDE used for impl stride scheduling
+pub const BIG_STRIDE: usize = (usize::MAX - 1) / 2;
