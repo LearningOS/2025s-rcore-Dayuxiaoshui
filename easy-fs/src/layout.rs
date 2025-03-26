@@ -1,4 +1,4 @@
-//! Disk layout & data structure layer
+///! Disk layout & data structure layer
 //!
 //! In the easy-fs disk layout, the disk is divided into five contiguous regions:
 //!

@@ -49,6 +49,8 @@ pub struct ProcessControlBlockInner {
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+    /// is deadlock detection enable
+    pub dead_lock_detect: bool,
 }
 
 impl ProcessControlBlockInner {
@@ -81,6 +83,79 @@ impl ProcessControlBlockInner {
     /// get a task with tid in this process
     pub fn get_task(&self, tid: usize) -> Arc<TaskControlBlock> {
         self.tasks[tid].as_ref().unwrap().clone()
+    }
+    /// deadlock detectiong algorithm
+    pub fn deadlock_detect(&self) -> bool {
+        let len = self.mutex_list.len()  + self.semaphore_list.len();
+
+        let mut allocation: Vec<Vec<u32>> = vec![vec![0; len]; self.tasks.len()];
+        let mut need: Vec<Vec<u32>> = vec![vec![0; len]; self.tasks.len()];
+
+        let fetch_id = |flag, id| -> usize {
+            match flag {
+                true => id + self.mutex_list.len(),
+                false => id,
+            }
+        };
+        for (tid, tcb) in self.tasks.iter().enumerate() {
+            if let Some(task) = tcb {
+                let inner = task.inner_exclusive_access();
+                for allc in &inner.allocation {
+                    allocation[tid][fetch_id(allc.0, allc.1)] += 1;
+                }
+                if let Some(n) = &inner.resource {
+                    need[tid][fetch_id(n.0, n.1)] += 1;
+                }
+            }
+        }
+
+        // step 1: set `work` vector & `finish` vector
+        // represent the resources os provided
+        let mut work: Vec<u32> = vec![0; len];
+        // initialize `work` vector as `available` vector
+        for (i, option) in self.mutex_list.iter().enumerate() {
+            if let Some(mutex) = option {
+                if !mutex.is_locked() {
+                    work[i] += 1;
+                }
+            }
+        }
+        for (i, option) in self.semaphore_list.iter().enumerate() {
+            if let Some(semaphore) = option {
+                let count = semaphore.inner.exclusive_access().count;
+                if count > 0 {
+                    work[i + self.mutex_list.len()] += count as u32;
+                }
+            }
+        }
+
+        // initialize `finish` vector
+        let mut finish = vec![false; self.tasks.len()];
+        loop {
+            // step 2
+            let task = finish.iter().enumerate().find(|(tid, finished)| {
+                if **finished {
+                    false
+                } else { // Finish[i] == false;
+                    for j in 0..len {
+                        if need[*tid][j] > work[j] {
+                            return false;
+                        }
+                    }
+                    true // Need[i,j] ≤ Work[j];
+                }
+            });
+            // step 3
+            if let Some((tid, _)) = task {
+                for j in 0..len {
+                    work[j] += allocation[tid][j]; // Work[j] = Work[j] + Allocation[i, j];
+                }
+                finish[tid] = true; // Finish[i] = true;
+            } else {
+                break; // goto step 4
+            }
+        }
+        finish.contains(&false) // step 4: if Finish[0..n-1] = true -> safe, otherwise -> deadlock
     }
 }
 
@@ -119,6 +194,7 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    dead_lock_detect: false,
                 })
             },
         });
@@ -245,6 +321,7 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    dead_lock_detect: false,
                 })
             },
         });
