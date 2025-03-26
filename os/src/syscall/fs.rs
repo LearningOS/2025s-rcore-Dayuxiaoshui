@@ -1,23 +1,19 @@
 //! File and filesystem-related syscalls
-use crate::fs::{linkat, open_file, unlinkat, OpenFlags, Stat};
-use crate::mm::{translated_byte_buffer, translated_str, UserBuffer, VirtAddr};
+use crate::fs::{open_file, OpenFlags, Stat, link_file, unlink_file};
+use crate::mm::{translated_byte_buffer, translated_str, UserBuffer};
+use crate::syscall::copy_to_virt;
 use crate::task::{current_task, current_user_token};
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     trace!("kernel:pid[{}] sys_write", current_task().unwrap().pid.0);
     let token = current_user_token();
     let task = current_task().unwrap();
-    let inner = task.inner_exclusive_access();
-    if fd >= inner.fd_table.len() {
-        return -1;
-    }
-    if let Some(file) = &inner.fd_table[fd] {
+
+    if let Some(file) = task.get_file_by_fd(fd){
         if !file.writable() {
             return -1;
         }
-        let file = file.clone();
         // release current task TCB manually to avoid multi-borrow
-        drop(inner);
         file.write(UserBuffer::new(translated_byte_buffer(token, buf, len))) as isize
     } else {
         -1
@@ -76,66 +72,42 @@ pub fn sys_close(fd: usize) -> isize {
 }
 
 /// YOUR JOB: Implement fstat.
-pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_fstat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    let task = current_task().unwrap();
+pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
+    debug!("kernel: sys_fstat fd: {}", fd);
+    let task = current_task().expect("sys_fstat: no current task");
     let inner = task.inner_exclusive_access();
-    if _fd >= inner.fd_table.len() {
+    let Some(file) = inner.fd_table[fd].clone() else {
         return -1;
-    }
-    if let Some(inode) = &inner.fd_table[_fd] {
-        let (ino, mode, nlink) = inode.fstat();
-        drop(inner);
-        let st = super::va_to_pa(VirtAddr::from(_st as usize));
-        if let Some(pa) = st {
-            let st = pa.0 as *mut Stat;
-            unsafe {
-                (*st).ino = ino;
-                (*st).mode = mode;
-                (*st).nlink = nlink;
-            }
-            0
-        } else {
-            -1
-        }
-    } else {
-        -1
-    }
+    };
+    drop(inner);
+
+    let stat = file.stat();
+    copy_to_virt(&stat, st);
+    0
 }
 
 /// YOUR JOB: Implement linkat.
-pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_linkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    let old_name = super::va_to_pa(VirtAddr::from(_old_name as usize));
-    let new_name = super::va_to_pa(VirtAddr::from(_new_name as usize));
-    if let (Some(old), Some(new)) = (old_name, new_name) {
-        let old_name = old.0 as *const u8;
-        let new_name = new.0 as *const u8;
-        linkat(old_name, new_name)
+pub fn sys_linkat(old_name: *const u8, new_name: *const u8) -> isize {
+    let token = current_user_token();
+    let old_name = translated_str(token, old_name);
+    let new_name = translated_str(token, new_name);
+    debug!("kernel: sys_linkat old_name: {}, new_name: {}", old_name, new_name);
+    if link_file(&old_name, &new_name) {
+        0
     } else {
-        error!("sys_linkat() failed");
         -1
     }
 }
 
 /// YOUR JOB: Implement unlinkat.
-pub fn sys_unlinkat(_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    let name = super::va_to_pa(VirtAddr::from(_name as usize));
-    if let Some(n) = name {
-        let name = n.0 as *const u8;
-        unlinkat(name)
+pub fn sys_unlinkat(name: *const u8) -> isize {
+    let token = current_user_token();
+    let name = translated_str(token, name);
+    debug!("kernel: sys_unlinkat name: {}", name);
+
+    if unlink_file(&name) {
+        0
     } else {
-        error!("sys_unlinkat() failed");
         -1
     }
 }

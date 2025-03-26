@@ -4,10 +4,10 @@
 
 use core::arch::asm;
 
-const SBI_SET_TIMER: usize = 0;
+const SBI_SET_TIMER: usize = 0x54494D45;
 const SBI_CONSOLE_PUTCHAR: usize = 1;
 const SBI_CONSOLE_GETCHAR: usize = 2;
-const SBI_SHUTDOWN: usize = 8;
+const SBI_SHUTDOWN: usize = 0x53525354;
 
 /// general sbi call
 #[inline(always)]
@@ -15,11 +15,11 @@ fn sbi_call(which: usize, arg0: usize, arg1: usize, arg2: usize) -> usize {
     let mut ret;
     unsafe {
         asm!(
-            "li x16, 0",
             "ecall",
             inlateout("x10") arg0 => ret,
             in("x11") arg1,
             in("x12") arg2,
+            in("x16") 0,
             in("x17") which,
         );
     }
